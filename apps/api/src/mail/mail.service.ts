@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
+import { isLocalDevelopment } from '../local-development';
 
 export interface ThresholdAlertItem {
   toolName: string;
@@ -21,12 +22,12 @@ export interface UpcomingRenewalItem {
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
-  private resend: Resend;
+  private resend: Resend | null;
   private from: string;
   private frontendUrl: string;
 
   constructor(private config: ConfigService) {
-    this.resend = new Resend(config.get<string>('RESEND_API_KEY'));
+    this.resend = isLocalDevelopment(config) ? null : new Resend(config.get<string>('RESEND_API_KEY'));
     // Use verified domain sender if configured, else Resend's sandbox address
     this.from = config.get<string>('MAIL_FROM', 'Spend Management <onboarding@resend.dev>');
     this.frontendUrl = config.get<string>('FRONTEND_URL', 'http://localhost:3000');
@@ -45,6 +46,10 @@ export class MailService {
    */
   async sendThresholdAlert(to: string, alerts: ThresholdAlertItem[], upcomingRenewals: UpcomingRenewalItem[] = []) {
     if (alerts.length === 0) return;
+    if (!this.resend) {
+      this.logger.log(`Local development: skipped threshold email (${alerts.length} alerts)`);
+      return;
+    }
 
     const subject = alerts.length === 1
       ? `⚠️ Budget Alert: ${alerts[0].toolName} has reached ${alerts[0].barPct}% of its cap`
@@ -69,6 +74,10 @@ export class MailService {
     daysAway: number,
     monthlyAmount: number | null,
   ) {
+    if (!this.resend) {
+      this.logger.log('Local development: skipped renewal email');
+      return;
+    }
     const urgencyColor = daysAway === 0 ? '#F85149' : '#F5A623';
     const urgencyLabel = daysAway === 0 ? 'today' : `in ${daysAway} day${daysAway === 1 ? '' : 's'}`;
     const dateStr = renewalDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });

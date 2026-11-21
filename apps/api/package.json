@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "nest start --watch",
+    "dev": "nest start --watch --entryFile src/main",
     "build": "nest build",
-    "start": "node dist/main",
+    "start": "node dist/src/main",
     "test": "jest",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "lint": "eslint src --ext .ts",
@@ -13,7 +13,8 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
-    "db:seed": "ts-node prisma/seed.ts"
+    "db:seed": "ts-node prisma/seed.ts",
+    "db:seed:local": "ts-node scripts/seed-local.ts"
   },
   "dependencies": {
     "@google-cloud/bigquery": "^8.3.1",

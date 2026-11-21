@@ -15,6 +15,13 @@ function mockFetchResponse(opts: { status: number; body: string; ok?: boolean })
 describe('api request()', () => {
   afterEach(() => jest.restoreAllMocks());
 
+  it('returns the login error without attempting a token refresh', async () => {
+    mockFetchResponse({ status: 401, body: JSON.stringify({ message: 'Invalid credentials' }) });
+    await expect(api.post('/auth/login', { email: 'developer@example.test', password: 'wrong' }))
+      .rejects.toThrow('Invalid credentials');
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('returns null for a 200 response with a genuinely empty body (NestJS handler returning `null`, e.g. previewLimits for a provider with no fetchLimitsUSD)', async () => {
     mockFetchResponse({ status: 201, body: '' });
     const result = await api.post('/integrations/preview-limits', { provider: 'HEYGEN', config: {} });

@@ -42,6 +42,8 @@ spend-management/
 
 ## Getting started
 
+> On Windows without Docker or Google/Resend credentials, follow [docs/local-development.md](docs/local-development.md) instead and run `pnpm dev:local`.
+
 ### 1. Start infrastructure
 
 ```bash
