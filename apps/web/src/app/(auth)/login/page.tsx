@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { storeUser } from '@/lib/auth';
 import { api } from '@/lib/api';
+import { LocalLogin } from '@/components/local-login';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
 const POLL_INTERVAL_MS = 3000;
@@ -81,6 +82,15 @@ function LoginCard() {
   const params = useSearchParams();
   const pendingToken = params.get('pending');
   const [fatalError, setFatalError] = useState<string | null>(params.get('error'));
+
+  if (process.env.NODE_ENV === 'development' && process.env.NEXT_PUBLIC_LOCAL_DEV_MODE === 'true') {
+    return (
+      <div style={{ width: 440, maxWidth: 'calc(100vw - 32px)', background: 'var(--c-0f1116)', border: '1px solid var(--c-1e212a)', borderRadius: 18, padding: '38px 40px' }}>
+        <h1 className="mb-4 text-xl font-bold">Welcome back</h1>
+        <LocalLogin />
+      </div>
+    );
+  }
 
   function handleGoogleSSO() {
     window.location.href = `${API_URL}/auth/google`;

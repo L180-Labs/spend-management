@@ -5,6 +5,7 @@ import { Clock } from 'lucide-react';
 import { api } from '@/lib/api';
 import { fmt } from '@/lib/utils';
 import { exportSpendAnalysis, exportBillingHistory } from '@/lib/excel';
+import { SpendTrend } from '@/components/reports/spend-trend';
 
 interface CategoryData { category: string; total: number; pct: number; }
 interface BillingRecord {
@@ -116,7 +117,7 @@ const labelStyle: React.CSSProperties = {
 };
 
 export default function ReportsPage() {
-  const [tab, setTab] = useState<'spend' | 'billing'>('spend');
+  const [tab, setTab] = useState<'spend' | 'trends' | 'billing'>('spend');
   const [categories, setCategories] = useState<CategoryData[]>([]);
   const [billing, setBilling] = useState<BillingRecord[]>([]);
   const [period, setPeriod] = useState<Period>('current');
@@ -174,7 +175,7 @@ export default function ReportsPage() {
           <h1 style={{ fontSize: 18, fontWeight: 660, color: 'var(--c-f2f3f5)', letterSpacing: '-.02em', margin: '0 0 4px' }}>Reports</h1>
           <p style={{ fontSize: 12, color: 'var(--c-767b86)', margin: 0 }}>Spend breakdown across categories and tools.</p>
         </div>
-        <DownloadBtn
+        {tab !== 'trends' && <DownloadBtn
           onClick={() => {
             if (tab === 'spend') {
               const { start, end } = periodDateRange(period, customFrom, customTo);
@@ -187,14 +188,17 @@ export default function ReportsPage() {
             }
           }}
           label={tab === 'spend' ? 'Download Spend Report' : 'Download Billing History'}
-        />
+        />}
       </div>
 
       {/* Tab switcher */}
       <div style={{ display: 'flex', gap: 4, background: 'var(--c-121419)', border: '1px solid var(--c-1e212a)', borderRadius: 10, padding: 3, alignSelf: 'flex-start' }}>
         <TabBtn active={tab === 'spend'} onClick={() => setTab('spend')}>Spend Analysis</TabBtn>
+        <TabBtn active={tab === 'trends'} onClick={() => setTab('trends')}>Trends</TabBtn>
         <TabBtn active={tab === 'billing'} onClick={() => setTab('billing')}>Billing History</TabBtn>
       </div>
+
+      {tab === 'trends' && <SpendTrend fmtAmt={fmtAmt} />}
 
       {tab === 'spend' && (
         <>

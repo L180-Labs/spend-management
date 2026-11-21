@@ -1,3 +1,17 @@
+/** One input in a provider's credential form (see IntegrationProviderMeta.credentialFields). */
+export interface CredentialField {
+  /** The config key the backend provider reads. */
+  key: string;
+  label: string;
+  placeholder?: string;
+  /** Rendered as a password input. */
+  secret?: boolean;
+  optional?: boolean;
+  /** Rendered as a select instead of a text input. */
+  options?: { value: string; label: string }[];
+  defaultValue?: string;
+}
+
 export interface IntegrationProviderMeta {
   value: string;
   label: string;
@@ -36,6 +50,10 @@ export interface IntegrationProviderMeta {
    * a null result is a normal, expected state, not an error - Connect should
    * fall back to manual cap entry instead of hard-blocking. */
   limitsOptional?: boolean;
+  /** Generic multi-input credential form (e.g. AWS key ID + secret, GitHub
+   * account + token). When set, the modals render these fields instead of
+   * the single tokenKey input. GCP keeps its own bespoke form (multiField). */
+  credentialFields?: CredentialField[];
 }
 
 // Single source of truth for which integrations/known vendors are supported,
@@ -151,6 +169,68 @@ export const INTEGRATION_PROVIDERS: IntegrationProviderMeta[] = [
     // BigQuery Billing Export is a daily batch, hours-to-5-days behind - never
     // "Live" the way Railway/Claude/HeyGen's syncs are.
     hasLag: true,
+  },
+  {
+    value: 'AWS',
+    label: 'Amazon Web Services (AWS)',
+    vendor: 'AWS',
+    hasApi: true,
+    tokenKey: 'secretAccessKey',
+    tokenLabel: 'Secret Access Key',
+    placeholder: '',
+    helpText: 'IAM → Users → Security credentials → Create access key. The key needs ce:GetCostAndUsage (plus budgets:ViewBudget to read your monthly budget). AWS bills $0.01 for every sync, including saving and "Sync now". Automatic syncs run every 6 hours - about $1.20 a month per account.',
+    // Reads a monthly COST budget from AWS Budgets when one exists; budgets are
+    // optional in AWS, so a missing one falls back to manual cap entry.
+    hasLimits: true,
+    limitsOptional: true,
+    defaultPaymentKind: 'PREPAID',
+    // Cost Explorer data trails real usage by up to ~24h.
+    hasLag: true,
+    credentialFields: [
+      { key: 'accessKeyId', label: 'Access Key ID', placeholder: 'AKIA…' },
+      { key: 'secretAccessKey', label: 'Secret Access Key', placeholder: 'Paste the secret access key', secret: true },
+      // Only for temporary (STS / SSO) credentials, whose key ID starts with ASIA.
+      // Those expire within hours, so a permanent IAM user key is the better fit for syncing.
+      { key: 'sessionToken', label: 'Session Token', placeholder: 'Only for temporary credentials (key ID starting ASIA…)', secret: true, optional: true },
+    ],
+  },
+  {
+    value: 'GITHUB',
+    label: 'GitHub',
+    vendor: 'GitHub',
+    hasApi: true,
+    tokenKey: 'token',
+    tokenLabel: 'Access Token',
+    placeholder: '',
+    helpText: 'github.com → Settings → Developer settings → Fine-grained token. Organization: "Administration" read (you must be an owner or billing manager). Personal account: "Plan" read.',
+    // Metered usage only (Actions, Packages, Codespaces, Copilot, seats) from the
+    // enhanced billing usage report - no budget is read, cap is entered manually.
+    hasLimits: false,
+    defaultPaymentKind: 'PREPAID',
+    credentialFields: [
+      { key: 'accountType', label: 'Account type', options: [{ value: 'org', label: 'Organization' }, { value: 'user', label: 'Personal account' }], defaultValue: 'org' },
+      { key: 'accountName', label: 'Organization or username', placeholder: 'e.g. life180labs' },
+      { key: 'token', label: 'Access Token', placeholder: 'github_pat_…', secret: true },
+    ],
+  },
+  {
+    value: 'META_ADS',
+    label: 'Meta Ads',
+    // "Meta Ads", not "Meta": vendor matching is a substring check, and plain
+    // "meta" would also claim unrelated vendors (e.g. Metabase).
+    vendor: 'Meta Ads',
+    hasApi: true,
+    tokenKey: 'accessToken',
+    tokenLabel: 'Access Token',
+    placeholder: '',
+    helpText: 'Business Settings → Users → System users → Generate token with ads_read, and assign the ad account to that system user. Ad account ID is in Ads Manager (act_…).',
+    // An ad account's spend_cap is a lifetime cap, not a monthly budget - cap is entered manually.
+    hasLimits: false,
+    defaultPaymentKind: 'PREPAID',
+    credentialFields: [
+      { key: 'adAccountId', label: 'Ad Account ID', placeholder: 'act_1234567890' },
+      { key: 'accessToken', label: 'Access Token', placeholder: 'System user access token', secret: true },
+    ],
   },
 ];
 

@@ -14,7 +14,7 @@ jest.mock('./providers/claude.provider', () => ({
 }));
 
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { IntegrationsService } from './integrations.service';
+import { IntegrationsService, SAVE_SYNC_WAIT_MS } from './integrations.service';
 import { PROVIDERS } from './integration-runner.service';
 
 describe('IntegrationsService', () => {
@@ -32,6 +32,70 @@ describe('IntegrationsService', () => {
     };
     runner = { runOne: jest.fn() };
     service = new IntegrationsService(prisma, runner);
+  });
+
+  describe('upsert', () => {
+    it('runs the first sync immediately after saving, instead of waiting for the hourly scheduler', async () => {
+      prisma.tool.findFirst.mockResolvedValue({ id: 't1' });
+      const saved = { id: 'i1', toolId: 't1', provider: 'AWS', config: { accessKeyId: 'k' }, isActive: true };
+      prisma.toolIntegration.upsert = jest.fn().mockResolvedValue(saved);
+      prisma.toolIntegration.findUnique.mockResolvedValue(saved);
+
+      await service.upsert('t1', 'org1', { provider: 'AWS', config: { accessKeyId: 'k' } });
+      // The Add Tool / Configure screens set the cap; this sync must not.
+      expect(runner.runOne).toHaveBeenCalledWith(saved, { applyLimits: false });
+      // Credentials are stored exactly as given; the bookkeeping goes in its own columns:
+      // a new config version, "no provider cap applied since this save", and no old back-off.
+      const bookkeeping = {
+        config: { accessKeyId: 'k' },
+        configUpdatedAt: expect.any(Date),
+        lastProviderCapUSD: null,
+        providerCapTracked: true,
+        lastFailedSyncAt: null,
+        lastError: null,
+      };
+      expect(prisma.toolIntegration.upsert).toHaveBeenCalledWith(expect.objectContaining({
+        create: expect.objectContaining(bookkeeping),
+        update: expect.objectContaining(bookkeeping),
+      }));
+    });
+
+    it('never sends the saved secrets back - the response is masked like GET', async () => {
+      prisma.tool.findFirst.mockResolvedValue({ id: 't1' });
+      const config = { accessKeyId: 'AKIAEXAMPLEKEY123', secretAccessKey: 'wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY' };
+      const saved = { id: 'i1', toolId: 't1', provider: 'AWS', config, isActive: true };
+      prisma.toolIntegration.upsert = jest.fn().mockResolvedValue(saved);
+      prisma.toolIntegration.findUnique.mockResolvedValue(saved);
+
+      const result: any = await service.upsert('t1', 'org1', { provider: 'AWS', config });
+      expect(JSON.stringify(result)).not.toContain(config.secretAccessKey);
+      expect(result.config.secretAccessKey).toBe('wJal••••EKEY');
+    });
+
+    it('returns without waiting forever when the provider is slow (the sync carries on in the background)', async () => {
+      jest.useFakeTimers();
+      try {
+        prisma.tool.findFirst.mockResolvedValue({ id: 't1' });
+        const saved = { id: 'i1', toolId: 't1', provider: 'GITHUB', config: {}, isActive: true };
+        prisma.toolIntegration.upsert = jest.fn().mockResolvedValue(saved);
+        prisma.toolIntegration.findUnique.mockResolvedValue(saved);
+        runner.runOne.mockReturnValue(new Promise(() => { /* never settles */ }));
+
+        const pending = service.upsert('t1', 'org1', { provider: 'GITHUB', config: {} });
+        await jest.advanceTimersByTimeAsync(SAVE_SYNC_WAIT_MS);
+        await expect(pending).resolves.toEqual(expect.objectContaining({ id: 'i1' }));
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('does not sync an integration saved as inactive', async () => {
+      prisma.tool.findFirst.mockResolvedValue({ id: 't1' });
+      prisma.toolIntegration.upsert = jest.fn().mockResolvedValue({ id: 'i1', toolId: 't1', provider: 'AWS', config: {}, isActive: false });
+
+      await service.upsert('t1', 'org1', { provider: 'AWS', config: {}, isActive: false });
+      expect(runner.runOne).not.toHaveBeenCalled();
+    });
   });
 
   describe('fetchLimits', () => {

@@ -35,6 +35,15 @@ export interface SpendResult {
 }
 
 export interface IntegrationProvider {
+  /**
+   * Shortest gap between SCHEDULED syncs, for providers whose API is billed per
+   * call or whose data only refreshes a few times a day (e.g. AWS Cost Explorer:
+   * $0.01 a request, refreshed ~3x daily). The hourly scheduler skips the
+   * integration until this long after its last successful sync. Saving the
+   * integration and "Sync now" always sync immediately. Unset = every run.
+   */
+  minSyncIntervalMinutes?: number;
+
   /** Fetch the current-period spend in USD, with a breakdown if the provider supports one. */
   fetchSpendUSD(config: Record<string, any>): Promise<SpendResult>;
 

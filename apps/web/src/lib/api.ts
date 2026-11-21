@@ -15,7 +15,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
 
-  if (res.status === 401) {
+  // Invalid sign-in credentials should stay on the form and show the API error.
+  // Refreshing/reloading here would hide the error and discard the typed email.
+  if (res.status === 401 && path !== '/auth/login' && path !== '/auth/signup') {
     // Try refresh
     const refreshed = await tryRefresh();
     if (refreshed) {
