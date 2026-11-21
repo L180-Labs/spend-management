@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { X, Loader2, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react';
 import { api } from '@/lib/api';
 import { INTEGRATION_PROVIDERS, matchProviderByVendor } from '@/lib/integration-providers';
+import { CredentialFields, credentialFieldsConfig, credentialFieldsReady } from './credential-fields';
 
 interface Integration {
   id: string;
@@ -59,16 +60,23 @@ export function IntegrationModal({ toolId, toolName, toolVendor, onClose, onSync
   const [appliedLimits, setAppliedLimits] = useState<ProviderLimits | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const selectedProvider = PROVIDERS.find((p) => p.value === provider) ?? PROVIDERS[0];
+  // AWS / GitHub / Meta Ads etc. - see IntegrationProviderMeta.credentialFields.
+  const [credentialValues, setCredentialValues] = useState<Record<string, string>>({});
+  const credentialFields = selectedProvider.credentialFields;
   const isMultiField = !!selectedProvider.multiField;
   const multiFieldReady = !!(gcpBillingAccountId.trim() && gcpProjectId.trim() && gcpDatasetId.trim() && gcpTableName.trim() && gcpServiceAccountJson.trim());
-  const credentialReady = isMultiField ? multiFieldReady : !!apiToken.trim();
+  const credentialReady = credentialFields
+    ? credentialFieldsReady(credentialFields, credentialValues)
+    : isMultiField ? multiFieldReady : !!apiToken.trim();
 
   function resetCredentialFields() {
     setApiToken('');
     setGcpBillingAccountId(''); setGcpProjectId(''); setGcpDatasetId(''); setGcpTableName(''); setGcpServiceAccountJson('');
+    setCredentialValues({});
   }
 
   function buildConfig(): Record<string, string> {
+    if (credentialFields) return credentialFieldsConfig(credentialFields, credentialValues);
     if (isMultiField) {
       return {
         serviceAccountJson: gcpServiceAccountJson.trim(),
@@ -105,7 +113,7 @@ export function IntegrationModal({ toolId, toolName, toolVendor, onClose, onSync
 
   async function handleSave() {
     if (!credentialReady) {
-      setFormError(isMultiField ? 'All GCP fields are required' : `${selectedProvider.tokenLabel} is required`);
+      setFormError(credentialFields || isMultiField ? `All ${selectedProvider.label} fields are required` : `${selectedProvider.tokenLabel} is required`);
       return;
     }
     setFormError(''); setSaving(true);
@@ -313,7 +321,21 @@ export function IntegrationModal({ toolId, toolName, toolVendor, onClose, onSync
 
                 {/* Credentials - a single token for most providers, or GCP's 5-field form */}
                 <div style={{ marginBottom: 20 }}>
-                  {isMultiField ? (
+                  {credentialFields ? (
+                    <>
+                      {isConnected && (
+                        <p style={{ fontSize: 11.5, color: 'var(--c-4a4f59)', margin: '0 0 8px' }}>Re-enter all fields to update the credentials.</p>
+                      )}
+                      <CredentialFields
+                        fields={credentialFields}
+                        values={credentialValues}
+                        onChange={(key, value) => setCredentialValues((v) => ({ ...v, [key]: value }))}
+                        inputStyle={{ ...S, width: '100%', padding: '9px 12px', borderRadius: 10, fontSize: 13, boxSizing: 'border-box' }}
+                        labelStyle={{ display: 'block', fontSize: 11.5, color: 'var(--c-9aa0ab)', marginBottom: 6 }}
+                      />
+                      <p style={{ fontSize: 11, color: 'var(--c-4a4f59)', marginTop: 6 }}>{selectedProvider.helpText}</p>
+                    </>
+                  ) : isMultiField ? (
                     <>
                       <label style={{ display: 'block', fontSize: 11.5, color: 'var(--c-9aa0ab)', marginBottom: 6 }}>
                         GCP credentials

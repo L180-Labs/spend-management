@@ -73,12 +73,14 @@ describe('INTEGRATION_PROVIDERS', () => {
     expect(gcp.limitsOptional).toBe(true);
   });
 
-  it('every other provider defaults multiField/hasLag/limitsOptional to falsy (only GCP opts in)', () => {
-    const others = INTEGRATION_PROVIDERS.filter((p) => p.value !== 'GCP');
-    others.forEach((p) => {
-      expect(p.multiField).toBeFalsy();
+  it('only GCP uses the bespoke multiField form; only GCP and AWS (batch cost data, optional budgets) opt into hasLag/limitsOptional', () => {
+    INTEGRATION_PROVIDERS.filter((p) => p.value !== 'GCP').forEach((p) => expect(p.multiField).toBeFalsy());
+    INTEGRATION_PROVIDERS.filter((p) => !['GCP', 'AWS'].includes(p.value)).forEach((p) => {
       expect(p.hasLag).toBeFalsy();
       expect(p.limitsOptional).toBeFalsy();
     });
+    const aws = INTEGRATION_PROVIDERS.find((p) => p.value === 'AWS')!;
+    expect(aws.hasLag).toBe(true);
+    expect(aws.limitsOptional).toBe(true);
   });
 });

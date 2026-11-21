@@ -15,7 +15,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen" style={{ background: 'var(--c-0d0f14)' }}>
       <Sidebar />
-      <main className="flex-1 min-h-screen" style={{ marginLeft: 224, background: 'var(--c-080a0e)' }}>
+      <main className="flex-1 min-w-0 min-h-screen" style={{ marginLeft: 224, background: 'var(--c-080a0e)' }}>
         {children}
       </main>
     </div>

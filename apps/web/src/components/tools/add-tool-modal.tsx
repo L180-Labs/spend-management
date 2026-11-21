@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '@/lib/api';
 import { INTEGRATION_PROVIDERS } from '@/lib/integration-providers';
+import { CredentialFields, credentialFieldsConfig, credentialFieldsReady } from './credential-fields';
 
 /* ─── constants ─────────────────────────────────────────────────────────── */
 
@@ -161,6 +162,7 @@ export function AddToolModal({ onClose, onCreated, tool, connectedProviders }: P
     setConnectProvider(value);
     setApiKey(''); setFetchStatus('idle'); setLimits(null); setFetchError('');
     setGcpBillingAccountId(''); setGcpProjectId(''); setGcpDatasetId(''); setGcpTableName(''); setGcpServiceAccountJson('');
+    setCredentialValues({});
     const p = INTEGRATION_PROVIDERS.find((x) => x.value === value);
     if (!p) return; // NONE - leave paymentKind/mode/vendor as the user already had them
     setPaymentKind(p.defaultPaymentKind);
@@ -179,13 +181,21 @@ export function AddToolModal({ onClose, onCreated, tool, connectedProviders }: P
   const [fetchError, setFetchError] = useState('');
   const [limits, setLimits] = useState<Limits | null>(null);
 
+  // AWS / GitHub / Meta Ads etc. - see IntegrationProviderMeta.credentialFields.
+  const [credentialValues, setCredentialValues] = useState<Record<string, string>>({});
+  const credentialFields = selectedIntegration?.credentialFields;
+
   const isMultiField = !!selectedIntegration?.multiField;
   const multiFieldReady = !!(gcpBillingAccountId.trim() && gcpProjectId.trim() && gcpDatasetId.trim() && gcpTableName.trim() && gcpServiceAccountJson.trim());
   // Whether there's a credential to try connecting with - a single API key for
-  // most providers, or all five GCP fields filled in for a multiField one.
-  const connectKeyReady = isMultiField ? multiFieldReady : !!apiKey.trim();
+  // most providers, all five GCP fields for a multiField one, or every
+  // required credentialFields input.
+  const connectKeyReady = credentialFields
+    ? credentialFieldsReady(credentialFields, credentialValues)
+    : isMultiField ? multiFieldReady : !!apiKey.trim();
 
   function buildProviderConfig(): Record<string, string> {
+    if (credentialFields) return credentialFieldsConfig(credentialFields, credentialValues);
     if (isMultiField) {
       return {
         serviceAccountJson: gcpServiceAccountJson.trim(),
@@ -498,7 +508,17 @@ export function AddToolModal({ onClose, onCreated, tool, connectedProviders }: P
               {/* Connect account panel - only reachable when selectedIntegration.hasApi */}
               {selectedIntegration?.hasApi && mode === 'api' && (
                 <div style={{ backgroundColor: 'var(--c-0f1116)', border: '1px solid rgba(var(--fg-rgb),0.08)', borderRadius: 10, padding: '16px 16px 14px' }}>
-                  {isMultiField ? (
+                  {credentialFields ? (
+                    <div style={{ marginBottom: 10 }}>
+                      <CredentialFields
+                        fields={credentialFields}
+                        values={credentialValues}
+                        onChange={(key, value) => { setCredentialValues((v) => ({ ...v, [key]: value })); setFetchStatus('idle'); setLimits(null); }}
+                        inputStyle={S.input}
+                        labelStyle={S.label}
+                      />
+                    </div>
+                  ) : isMultiField ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 10 }}>
                       <div>
                         <label style={S.label}>Billing Account ID</label>
