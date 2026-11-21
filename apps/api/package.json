@@ -17,8 +17,10 @@
     "db:seed:local": "ts-node scripts/seed-local.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-budgets": "^3.1173.0",
+    "@aws-sdk/client-cost-explorer": "^3.1173.0",
+    "@aws-sdk/client-sts": "^3.1173.0",
     "@google-cloud/bigquery": "^8.3.1",
-    "google-auth-library": "^10.3.0",
     "@nestjs/bull": "^10.2.1",
     "@nestjs/common": "^10.4.1",
     "@nestjs/config": "^3.2.3",
@@ -34,6 +36,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "dayjs": "^1.11.13",
+    "google-auth-library": "^10.3.0",
     "ioredis": "^5.4.1",
     "nanoid": "^3.3.7",
     "nodemailer": "^9.0.1",

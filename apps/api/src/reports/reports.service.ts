@@ -12,6 +12,24 @@ function formatMonthLabel(monthKey: string): string {
   return `${months[parseInt(month) - 1]} ${year}`;
 }
 
+/** Calendar month (YYYY-MM, UTC - same basis as currentMonthKey) a timestamp falls in. */
+function monthKeyOf(d: Date): string {
+  return d.toISOString().slice(0, 7);
+}
+
+/**
+ * Whether a fixed-price (MOSUB) subscription counts toward a closed month: it
+ * existed by then, and wasn't deleted before that month began. A subscription
+ * deleted since was still being paid for in the months before. The one rule
+ * every report uses for its flat-rate fallback (closedMonthsByTool, which feeds
+ * the Dashboard periods and Trends, and billingHistory, which feeds Spend
+ * Analysis, Billing History and the Excel export), so they can't disagree.
+ */
+export function subscriptionCountsForMonth(t: { createdAt: Date; deletedAt: Date | null }, monthKey: string): boolean {
+  if (monthKeyOf(t.createdAt) > monthKey) return false;
+  return !t.deletedAt || monthKeyOf(t.deletedAt) >= monthKey;
+}
+
 function shiftMonthKey(monthKey: string, deltaMonths: number): string {
   const [year, month] = monthKey.split('-').map(Number);
   const d = new Date(year, month - 1 + deltaMonths, 1);
@@ -19,6 +37,55 @@ function shiftMonthKey(monthKey: string, deltaMonths: number): string {
 }
 
 export type DashboardSpendPeriod = 'this_month' | 'last_month' | 'this_quarter' | 'year_to_date';
+
+export type SpendTrendGranularity = 'month' | 'quarter' | 'year';
+export const SPEND_TREND_GRANULARITIES: SpendTrendGranularity[] = ['month', 'quarter', 'year'];
+const DEFAULT_TREND_BUCKETS: Record<SpendTrendGranularity, number> = { month: 12, quarter: 8, year: 3 };
+const MAX_TREND_BUCKETS: Record<SpendTrendGranularity, number> = { month: 36, quarter: 12, year: 5 };
+
+export interface SpendTrendPoint {
+  key: string;   // "2026-11" | "2026-Q4" | "2026"
+  label: string; // "Nov 2026" | "Q4 2026" | "2026"
+  byTool: Record<string, number>;
+  total: number;
+}
+
+export interface SpendTrend {
+  granularity: SpendTrendGranularity;
+  points: SpendTrendPoint[];
+  tools: { id: string; name: string; color: string | null; total: number }[];
+}
+
+/**
+ * The last `count` buckets ending with the one containing `currentMonth`,
+ * oldest first. Each bucket lists only months up to and including the
+ * current one, so the in-progress quarter/year is partial, never padded.
+ */
+export function trendBuckets(currentMonth: string, granularity: SpendTrendGranularity, count: number) {
+  const [year, month] = currentMonth.split('-').map(Number);
+  const monthsPerBucket = granularity === 'month' ? 1 : granularity === 'quarter' ? 3 : 12;
+  // First month (1-based) of the bucket containing the current month.
+  const bucketStartMonth = granularity === 'month' ? month : granularity === 'quarter' ? Math.floor((month - 1) / 3) * 3 + 1 : 1;
+  const currentBucketStart = `${year}-${String(bucketStartMonth).padStart(2, '0')}`;
+
+  const result: { key: string; label: string; monthKeys: string[] }[] = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const start = shiftMonthKey(currentBucketStart, -i * monthsPerBucket);
+    const monthKeys: string[] = [];
+    for (let m = 0; m < monthsPerBucket; m++) {
+      const mk = shiftMonthKey(start, m);
+      if (mk > currentMonth) break;
+      monthKeys.push(mk);
+    }
+    const [y, mo] = start.split('-').map(Number);
+    if (granularity === 'month') result.push({ key: start, label: formatMonthLabel(start), monthKeys });
+    else if (granularity === 'quarter') {
+      const q = Math.floor((mo - 1) / 3) + 1;
+      result.push({ key: `${y}-Q${q}`, label: `Q${q} ${y}`, monthKeys });
+    } else result.push({ key: String(y), label: String(y), monthKeys });
+  }
+  return result;
+}
 
 // Shape mirrors a BillingRecord (+ included tool) so the frontend can treat
 // live and historical rows identically.
@@ -209,24 +276,26 @@ export class ReportsService {
     // missing here entirely (Reports' "Last Month"/quarter/YTD filters and the
     // Excel export undercount it), instead of showing its flat rate. Backfill
     // one synthetic row per MOSUB tool for each month from its creation up to
-    // last month that has no real record yet. Marked PAID, not PENDING: a MOSUB
+    // last month (or the month it was deleted, if it since was - see
+    // subscriptionCountsForMonth) that has no real record yet. Marked PAID, not PENDING: a MOSUB
     // subscription auto-renews, so a month that has already closed was charged
     // (monthly) or covered by the yearly payment (pro-rated) - nobody has to act
     // on it, and "Pending" made last month's subscriptions look unpaid.
     const haveRecord = new Set(historical.map((r) => `${r.toolId}:${r.monthKey}`));
     const mosubTools = await this.prisma.tool.findMany({
-      where: { orgId, deletedAt: null, paymentKind: 'MOSUB' },
+      where: { orgId, paymentKind: 'MOSUB' }, // deleted ones too, for the months they were active
       select: {
         id: true, name: true, category: true, monoInitials: true, monoBgColor: true,
-        paymentKind: true, billingCycle: true, monthlyAmount: true, usedAmount: true, renewalDate: true, createdAt: true,
+        paymentKind: true, billingCycle: true, monthlyAmount: true, usedAmount: true, renewalDate: true, createdAt: true, deletedAt: true,
       },
     });
     for (const t of mosubTools) {
       const amount = monthlyEquivalentSpend(t);
       if (amount <= 0) continue;
-      const createdMonth = t.createdAt.toISOString().slice(0, 7);
+      const createdMonth = monthKeyOf(t.createdAt);
       for (let m = shiftMonthKey(currentMonth, -1); m >= createdMonth; m = shiftMonthKey(m, -1)) {
         if (haveRecord.has(`${t.id}:${m}`)) continue;
+        if (!subscriptionCountsForMonth(t, m)) continue;
         historical.push({
           id: `mosub-backfill-${t.id}-${m}`,
           toolId: t.id,
@@ -349,8 +418,12 @@ export class ReportsService {
    * it. Only a tool with NO closed record yet falls back to its live figure.
    */
   private async currentMonthTotalByTool(orgId: string): Promise<Record<string, number>> {
-    const result = await this.closedMonthTotalByTool(orgId, currentMonthKey());
+    return this.withLiveCurrentMonth(orgId, await this.closedMonthTotalByTool(orgId, currentMonthKey()));
+  }
 
+  /** Adds each active tool's live figure to the current month's closed records (see currentMonthTotalByTool). */
+  private async withLiveCurrentMonth(orgId: string, closed: Record<string, number>): Promise<Record<string, number>> {
+    const result = { ...closed };
     const tools = await this.prisma.tool.findMany({
       where: { orgId, deletedAt: null },
       select: { id: true, paymentKind: true, billingCycle: true, monthlyAmount: true, usedAmount: true },
@@ -366,37 +439,71 @@ export class ReportsService {
 
   /** Closed billing records for one month, summed per toolId (at most one record per tool per month - see the (orgId, toolId, monthKey) unique constraint). */
   private async closedMonthTotalByTool(orgId: string, monthKey: string): Promise<Record<string, number>> {
-    const records = await this.prisma.billingRecord.findMany({
-      where: { orgId, monthKey },
-      select: { toolId: true, amount: true },
-    });
-    const result: Record<string, number> = {};
+    return (await this.closedMonthsByTool(orgId, [monthKey])).get(monthKey) ?? {};
+  }
+
+  /**
+   * closedMonthTotalByTool for many months at once - two queries total, however
+   * many months, instead of two per month (the Trends report's yearly view spans
+   * up to 60 months).
+   *
+   * MOSUB is a flat fee - the same every month by definition (see
+   * monthlyEquivalentSpend), unlike PREPAID/CAPSUB whose current usedAmount is
+   * a live figure that can't stand in for a past month's actual usage. The
+   * roll-forward cron (scheduler.service.ts) only logs a closed month once that
+   * subscription's renewal cycle has actually rolled past it, so a MOSUB tool
+   * that existed that month can still be missing a record here (cron hasn't
+   * caught up, or its cycle doesn't land inside this calendar month) - fall back
+   * to its flat rate rather than reporting $0 for a subscription that was
+   * clearly active. That includes a subscription deleted SINCE: for a past month
+   * it was still active then, so it still counts. The current month only counts
+   * tools that aren't deleted, matching the live figures beside it.
+   */
+  private async closedMonthsByTool(orgId: string, monthKeys: string[]): Promise<Map<string, Record<string, number>>> {
+    const result = new Map<string, Record<string, number>>(monthKeys.map((k) => [k, {}]));
+    if (monthKeys.length === 0) return result;
+
+    const sorted = [...monthKeys].sort();
+    const thisMonth = currentMonthKey();
+    // UTC month bounds, matching monthKeyOf. The exact per-month test is
+    // subscriptionCountsForMonth below; this only narrows the query.
+    const [firstY, firstM] = sorted[0].split('-').map(Number);
+    const [lastY, lastM] = sorted[sorted.length - 1].split('-').map(Number);
+    const earliestStart = new Date(Date.UTC(firstY, firstM - 1, 1));
+    const latestEnd = new Date(Date.UTC(lastY, lastM, 1)); // exclusive
+
+    const [records, mosubTools] = await Promise.all([
+      this.prisma.billingRecord.findMany({
+        where: { orgId, monthKey: monthKeys.length === 1 ? monthKeys[0] : { in: monthKeys } },
+        select: { toolId: true, amount: true, monthKey: true },
+      }),
+      this.prisma.tool.findMany({
+        where: {
+          orgId,
+          paymentKind: 'MOSUB',
+          createdAt: { lt: latestEnd },
+          OR: [{ deletedAt: null }, { deletedAt: { gte: earliestStart } }],
+        },
+        select: { id: true, paymentKind: true, billingCycle: true, monthlyAmount: true, usedAmount: true, createdAt: true, deletedAt: true },
+      }),
+    ]);
+
     for (const r of records) {
       if (!r.toolId) continue;
-      result[r.toolId] = (result[r.toolId] ?? 0) + r.amount;
+      const byTool = result.get(r.monthKey ?? monthKeys[0]);
+      if (byTool) byTool[r.toolId] = (byTool[r.toolId] ?? 0) + r.amount;
     }
 
-    // MOSUB is a flat fee - the same every month by definition (see
-    // monthlyEquivalentSpend), unlike PREPAID/CAPSUB whose current usedAmount
-    // is a live figure that can't stand in for a past month's actual usage.
-    // The roll-forward cron (scheduler.service.ts) only logs a closed month
-    // once that subscription's renewal cycle has actually rolled past it, so
-    // a MOSUB tool that already existed that month can still be missing a
-    // record here (cron hasn't caught up, or its cycle doesn't land inside
-    // this calendar month) - fall back to its flat rate rather than reporting
-    // $0 for a subscription that was clearly active.
-    const [year, month] = monthKey.split('-').map(Number);
-    const startOfNextMonth = new Date(year, month, 1);
-    const mosubTools = await this.prisma.tool.findMany({
-      where: { orgId, deletedAt: null, paymentKind: 'MOSUB', createdAt: { lt: startOfNextMonth } },
-      select: { id: true, paymentKind: true, billingCycle: true, monthlyAmount: true, usedAmount: true },
-    });
-    for (const t of mosubTools) {
-      if (result[t.id] != null) continue; // already has a closed record this month
-      const amount = monthlyEquivalentSpend(t);
-      if (amount > 0) result[t.id] = amount;
+    for (const monthKey of monthKeys) {
+      const byTool = result.get(monthKey)!;
+      for (const t of mosubTools) {
+        if (byTool[t.id] != null) continue; // already has a closed record this month
+        if (!subscriptionCountsForMonth(t, monthKey)) continue;
+        if (t.deletedAt && monthKey >= thisMonth) continue; // current month: live figures only cover tools that still exist
+        const amount = monthlyEquivalentSpend(t);
+        if (amount > 0) byTool[t.id] = amount;
+      }
     }
-
     return result;
   }
 
@@ -473,6 +580,55 @@ export class ReportsService {
       }
     }
     return result;
+  }
+
+  /**
+   * Per-tool spend over time for the Reports "Trends" line chart. Each bucket
+   * (month / quarter / calendar year) sums the same per-month figures the rest
+   * of Reports uses - closed billing records (+ MOSUB flat-rate fallback) for
+   * past months, the live figure for the current month - so a bucket's total
+   * always matches periodSpend for the same window. Buckets end at the current
+   * period; months that haven't happened yet are never included.
+   */
+  async spendTrend(orgId: string, granularity: SpendTrendGranularity, buckets?: number): Promise<SpendTrend> {
+    const count = Math.min(Math.max(buckets ?? DEFAULT_TREND_BUCKETS[granularity], 1), MAX_TREND_BUCKETS[granularity]);
+    const currentMonth = currentMonthKey();
+    const bucketDefs = trendBuckets(currentMonth, granularity, count);
+
+    // One batched lookup for every month in range, then the live figures on top of the current month.
+    const byMonth = await this.closedMonthsByTool(orgId, bucketDefs.flatMap((b) => b.monthKeys));
+    if (byMonth.has(currentMonth)) byMonth.set(currentMonth, await this.withLiveCurrentMonth(orgId, byMonth.get(currentMonth)!));
+
+    const toolIds = new Set<string>();
+    const points: SpendTrendPoint[] = bucketDefs.map((b) => {
+      const byTool: Record<string, number> = {};
+      for (const monthKey of b.monthKeys) {
+        for (const [toolId, amount] of Object.entries(byMonth.get(monthKey) ?? {})) {
+          byTool[toolId] = (byTool[toolId] ?? 0) + amount;
+          toolIds.add(toolId);
+        }
+      }
+      const total = Object.values(byTool).reduce((sum, amount) => sum + amount, 0);
+      return { key: b.key, label: b.label, byTool, total };
+    });
+
+    // Look up names for deleted tools too - their past spend is still real spend
+    // (closed records, and flat-rate months from before a subscription was deleted).
+    const tools = toolIds.size === 0 ? [] : await this.prisma.tool.findMany({
+      where: { orgId, id: { in: [...toolIds] } },
+      select: { id: true, name: true, monoBgColor: true },
+    });
+    const meta = new Map(tools.map((t) => [t.id, t]));
+    const toolList = [...toolIds]
+      .map((id) => ({
+        id,
+        name: meta.get(id)?.name ?? 'Deleted tool',
+        color: meta.get(id)?.monoBgColor ?? null,
+        total: points.reduce((sum, p) => sum + (p.byTool[id] ?? 0), 0),
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    return { granularity, points, tools: toolList };
   }
 
   async dashboardKpis(orgId: string) {

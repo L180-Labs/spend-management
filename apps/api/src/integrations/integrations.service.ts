@@ -2,6 +2,9 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.service';
 import { IntegrationRunnerService, PROVIDERS } from './integration-runner.service';
 
+/** Longest Save waits for the first sync before returning (the sync keeps running after). */
+export const SAVE_SYNC_WAIT_MS = 20_000;
+
 @Injectable()
 export class IntegrationsService {
   constructor(
@@ -21,22 +24,55 @@ export class IntegrationsService {
 
   async upsert(toolId: string, orgId: string, body: { provider: string; config: Record<string, any>; isActive?: boolean }) {
     await this.assertToolOwnership(toolId, orgId);
-    return this.prisma.toolIntegration.upsert({
+    // Bookkeeping lives in its own columns, never inside config (the credentials):
+    //  - configUpdatedAt: a new version of the credentials. A sync still running
+    //    on the previous ones discards its result instead of writing it.
+    //  - lastProviderCapUSD null + providerCapTracked: "no provider cap applied
+    //    since this save" (see shouldAdoptProviderCap). It also drops any cap
+    //    remembered from before, so re-saving the integration is how a
+    //    hand-entered cap is handed back to the provider (the Configure screen
+    //    applies the provider's limit on save).
+    //  - lastFailedSyncAt cleared: new credentials shouldn't inherit the old back-off.
+    const bookkeeping = {
+      configUpdatedAt: new Date(),
+      lastProviderCapUSD: null,
+      providerCapTracked: true,
+      lastFailedSyncAt: null,
+      lastError: null,
+    };
+    const saved = await this.prisma.toolIntegration.upsert({
       where: { toolId },
       update: {
         provider: body.provider,
         config: body.config,
         isActive: body.isActive ?? true,
-        lastError: null,
-        updatedAt: new Date(),
+        ...bookkeeping,
       },
       create: {
         toolId,
         provider: body.provider,
         config: body.config,
         isActive: body.isActive ?? true,
+        ...bookkeeping,
       },
     });
+
+    // Sync straight away rather than waiting for the hourly scheduler, so a newly
+    // connected tool shows its spend (or a specific error) as soon as it's saved.
+    // runOne never throws - a failed fetch is recorded on lastError instead. The
+    // wait is capped: if the provider is slow, Save returns anyway and the sync
+    // finishes in the background (each request also has its own timeout).
+    // applyLimits: false - the Add Tool / Configure screens set the cap
+    // themselves, and a slow sync finishing after them must not overwrite it.
+    if (saved.isActive) {
+      let timer: NodeJS.Timeout | undefined;
+      const capped = new Promise<void>((resolve) => { timer = setTimeout(resolve, SAVE_SYNC_WAIT_MS); });
+      await Promise.race([this.runner.runOne(saved, { applyLimits: false }), capped]);
+      clearTimeout(timer);
+    }
+
+    // Never echo the saved credentials back - same masking as GET.
+    return this.get(toolId, orgId);
   }
 
   async remove(toolId: string, orgId: string) {

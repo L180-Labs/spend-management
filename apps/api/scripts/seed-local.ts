@@ -13,14 +13,20 @@ async function main() {
   if (!password || password.length < 12) throw new Error('Set LOCAL_DEV_PASSWORD to at least 12 characters.');
   const prisma = new PrismaClient();
   try {
-    const org = await prisma.organization.upsert({
-      where: { slug: 'local-development' }, update: {},
-      create: { slug: 'local-development', name: 'Local Development', currency: 'USD', planTier: 'PRO' },
-    });
-    const department = await prisma.department.upsert({
-      where: { orgId_code: { orgId: org.id, code: 'ENG' } }, update: {},
-      create: { orgId: org.id, code: 'ENG', name: 'Engineering' },
-    });
+    // LOCAL_DEV_ORG_SLUG joins an existing org (e.g. after copying Railway data locally).
+    const existingSlug = process.env.LOCAL_DEV_ORG_SLUG;
+    const org = existingSlug
+      ? await prisma.organization.findUniqueOrThrow({ where: { slug: existingSlug } })
+      : await prisma.organization.upsert({
+        where: { slug: 'local-development' }, update: {},
+        create: { slug: 'local-development', name: 'Local Development', currency: 'USD', planTier: 'PRO' },
+      });
+    const department = existingSlug
+      ? await prisma.department.findFirstOrThrow({ where: { orgId: org.id }, orderBy: { createdAt: 'asc' } })
+      : await prisma.department.upsert({
+        where: { orgId_code: { orgId: org.id, code: 'ENG' } }, update: {},
+        create: { orgId: org.id, code: 'ENG', name: 'Engineering' },
+      });
     const email = 'developer@example.test';
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await prisma.user.upsert({

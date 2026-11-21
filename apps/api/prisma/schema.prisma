@@ -307,6 +307,17 @@ model ToolIntegration {
   lastSyncByProject Json?     // per-project breakdown from the last sync, e.g. [{projectId, projectName, amountUSD}]
   lastSyncRemainingBalanceUSD Float? // wallet-style providers only (e.g. HeyGen) - null for every other provider
   lastError         String?
+  // Set only when config (the credentials) is saved - a sync that started
+  // before a newer save discards its result instead of writing it.
+  configUpdatedAt   DateTime  @default(now())
+  // Last failed sync; lastSyncAt only moves on success. Lets a slow-schedule
+  // provider (AWS) back off after failures too.
+  lastFailedSyncAt  DateTime?
+  // The cap the provider last set on the tool, so a hand-edited cap can be told
+  // apart from it. providerCapTracked = false: connected before this existed,
+  // keep following the provider. See shouldAdoptProviderCap.
+  lastProviderCapUSD Float?
+  providerCapTracked Boolean  @default(false)
   isActive          Boolean   @default(true)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
