@@ -120,6 +120,12 @@ $env:NODE_ENV='development'; $env:LOCAL_DEV_MODE='true'; pnpm db:seed:local
 
 `db:seed:local` creates a **Local Development** organization with an Engineering department and the `developer@example.test` admin account. It refuses to run unless `DATABASE_URL` points at `spend_management` on localhost, so it can't touch a shared database. Re-run it any time to reset the account's password to the current `LOCAL_DEV_PASSWORD`.
 
+If you've copied real data into the local database (for example from Railway), set `LOCAL_DEV_ORG_SLUG` to that organization's slug before seeding. The developer account then joins that existing org as an admin of its first department instead of creating the Local Development org:
+
+```powershell
+$env:NODE_ENV='development'; $env:LOCAL_DEV_MODE='true'; $env:LOCAL_DEV_ORG_SLUG='default-org'; pnpm db:seed:local
+```
+
 Then go back to the repo root and run `pnpm dev:local`.
 
 ## Troubleshooting
